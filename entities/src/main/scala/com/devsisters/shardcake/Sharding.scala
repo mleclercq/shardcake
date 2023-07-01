@@ -5,7 +5,7 @@ import com.devsisters.shardcake.errors.{ EntityNotManagedByThisPod, PodUnavailab
 import com.devsisters.shardcake.interfaces.Pods.BinaryMessage
 import com.devsisters.shardcake.interfaces.{ Pods, Serialization, Storage }
 import com.devsisters.shardcake.internal.{ EntityManager, ReplyChannel }
-import zio._
+import zio.{ Config => _, _ }
 import zio.stream.ZStream
 
 import java.time.OffsetDateTime
@@ -354,7 +354,7 @@ class Sharding private (
 
   def registerEntity[R, Req: Tag](
     entityType: EntityType[Req],
-    behavior: (String, Dequeue[Req]) => RIO[R, Nothing],
+    behavior: (String, Queue[Req]) => RIO[R, Nothing],
     terminateMessage: Promise[Nothing, Unit] => Option[Req] = (_: Promise[Nothing, Unit]) => None,
     entityMaxIdleTime: Option[Duration] = None
   ): URIO[Scope with R, Unit] = registerRecipient(entityType, behavior, terminateMessage, entityMaxIdleTime) *>
@@ -362,7 +362,7 @@ class Sharding private (
 
   def registerTopic[R, Req: Tag](
     topicType: TopicType[Req],
-    behavior: (String, Dequeue[Req]) => RIO[R, Nothing],
+    behavior: (String, Queue[Req]) => RIO[R, Nothing],
     terminateMessage: Promise[Nothing, Unit] => Option[Req] = (_: Promise[Nothing, Unit]) => None
   ): URIO[Scope with R, Unit] = registerRecipient(topicType, behavior, terminateMessage) *>
     eventsHub.publish(ShardingRegistrationEvent.TopicRegistered(topicType)).unit
@@ -372,7 +372,7 @@ class Sharding private (
 
   def registerRecipient[R, Req: Tag](
     recipientType: RecipientType[Req],
-    behavior: (String, Dequeue[Req]) => RIO[R, Nothing],
+    behavior: (String, Queue[Req]) => RIO[R, Nothing],
     terminateMessage: Promise[Nothing, Unit] => Option[Req] = (_: Promise[Nothing, Unit]) => None,
     entityMaxIdleTime: Option[Duration] = None
   ): URIO[Scope with R, Unit] =
@@ -489,7 +489,7 @@ object Sharding {
    */
   def registerEntity[R, Req: Tag](
     entityType: EntityType[Req],
-    behavior: (String, Dequeue[Req]) => RIO[R, Nothing],
+    behavior: (String, Queue[Req]) => RIO[R, Nothing],
     terminateMessage: Promise[Nothing, Unit] => Option[Req] = (_: Promise[Nothing, Unit]) => None,
     entityMaxIdleTime: Option[Duration] = None
   ): URIO[Sharding with Scope with R, Unit] =
@@ -503,7 +503,7 @@ object Sharding {
    */
   def registerTopic[R, Req: Tag](
     topicType: TopicType[Req],
-    behavior: (String, Dequeue[Req]) => RIO[R, Nothing],
+    behavior: (String, Queue[Req]) => RIO[R, Nothing],
     terminateMessage: Promise[Nothing, Unit] => Option[Req] = (_: Promise[Nothing, Unit]) => None
   ): URIO[Sharding with Scope with R, Unit] =
     ZIO.serviceWithZIO[Sharding](_.registerTopic[R, Req](topicType, behavior, terminateMessage))
