@@ -267,7 +267,10 @@ class Sharding private (
 
       def sendStream[Res](entityId: String)(msg: Replier[Res] => Msg): Task[ZStream[Any, Throwable, Res]] =
         Random.nextUUID.flatMap { uuid =>
-          sendMessageStreaming[Res](entityId, msg(Replier(uuid.toString)), Some(uuid.toString))
+          val body = msg(Replier(uuid.toString))
+          sendMessageStreaming[Res](entityId, body, Some(uuid.toString))
+            .timeoutFail(SendTimeoutException(entityType, entityId, body))(timeout)
+            .interruptible
         }
 
       private def sendMessage[Res](entityId: String, msg: Msg, replyId: Option[String]): Task[Option[Res]] =

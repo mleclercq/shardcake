@@ -2,7 +2,7 @@ val scala213 = "2.13.8"
 val scala3   = "3.2.1"
 val allScala = Seq(scala213, scala3)
 
-val zioVersion            = "2.0.13"
+val zioVersion            = "2.0.14"
 val zioGrpcVersion        = "0.6.0-rc5"
 val zioK8sVersion         = "2.0.2"
 val zioCacheVersion       = "0.2.1"
@@ -173,6 +173,42 @@ lazy val examples = project
       )
   )
   .dependsOn(manager, storageRedis, grpcProtocol, serializationKryo)
+
+lazy val livechat = crossProject(JSPlatform, JVMPlatform)
+  .in(file("livechat"))
+  .settings(name := "livechat")
+  .settings(publish / skip := true)
+  .settings(commonSettings)
+  .settings(
+    scalacOptions += "-Ymacro-annotations",
+    libraryDependencies += "io.circe" %%% "circe-core"    % "0.14.5",
+    libraryDependencies += "io.circe" %%% "circe-generic" % "0.14.5",
+    libraryDependencies += "io.circe" %%% "circe-parser"  % "0.14.5"
+  )
+  .jsSettings(
+    scalaJSUseMainModuleInitializer             := true,
+    scalaJSLinkerConfig ~= {
+      _.withModuleKind(ModuleKind.ESModule)
+        .withModuleSplitStyle(org.scalajs.linker.interface.ModuleSplitStyle.SmallModulesFor(List("livechart")))
+    },
+    libraryDependencies += "org.scala-js"      %%% "scalajs-dom"                 % "2.4.0",
+    libraryDependencies += "com.raquo"         %%% "laminar"                     % "15.0.1",
+    libraryDependencies += "io.laminext"       %%% "core"                        % "0.15.0",
+    libraryDependencies += "io.laminext"       %%% "websocket-circe"             % "0.15.0",
+    libraryDependencies += "io.laminext"       %%% "fetch-circe"                 % "0.15.0",
+    libraryDependencies += "io.github.cquiroz" %%% "scala-java-time"             % "2.5.0",
+    libraryDependencies += "org.scala-js"      %%% "scala-js-macrotask-executor" % "1.1.1"
+  )
+  .jvmSettings(
+    run / fork := true,
+    libraryDependencies ++=
+      Seq(
+        "dev.zio" %%% "zio"         % zioVersion,
+        "dev.zio" %%% "zio-streams" % zioVersion,
+        "dev.zio" %%% "zio-logging" % "2.1.13"
+      )
+  )
+  .jvmConfigure(_.dependsOn(manager, storageRedis, grpcProtocol, serializationKryo).enablePlugins(JavaAppPackaging))
 
 lazy val protobuf = Seq(
   PB.protocVersion := "3.19.2"
