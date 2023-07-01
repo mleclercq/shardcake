@@ -32,6 +32,14 @@ abstract class GrpcShardingService(sharding: Sharding, timeout: Duration) extend
   def pingShards(request: PingShardsRequest): ZIO[Any, StatusException, PingShardsResponse] =
     ZIO.succeed(PingShardsResponse())
 
+  def receive(request: ReceiveMessage): ZIO[Any, StatusException, ReceiveResponse] =
+    sharding
+      .localReceive(request.receiveId, request.body.toByteArray)
+      .foldZIO(
+        e => ZIO.fail(Status.INTERNAL.withCause(e).withDescription(e.getMessage).asException()),
+        if (_) ZIO.succeed(ReceiveResponse()) else ZIO.fail(Status.RESOURCE_EXHAUSTED.asException())
+      )
+
   private def mapErrorToStatusWithInternalDetails: Function[Throwable, StatusException] = {
     case e: StatusException           => e
     case e: StatusRuntimeException    => e.getStatus.asException()
@@ -53,6 +61,7 @@ object GrpcShardingService {
         builder   = ServerBuilder.forPort(config.shardingPort).addService(ProtoReflectionService.newInstance())
         services  = ServiceList.add(new GrpcShardingService(sharding, config.sendTimeout) {})
         _        <- ScopedServer.fromServiceList(builder, services)
+        _        <- ZIO.logInfo(s"GRPC service started on port ${config.shardingPort}")
       } yield ()
     }
 }

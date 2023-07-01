@@ -99,8 +99,11 @@ class ShardManager(
                                                              podApi
                                                                .ping(pod)
                                                                .timeout(config.pingTimeout)
-                                                               .someOrFailException
-                                                               .fold(_ => Set(pod), _ => Set.empty)
+                                                               .someOrFail(new Exception("Timeout pinging pod"))
+                                                               .foldCauseZIO(
+                                                                 ZIO.logWarningCause(s"Ping error for pod $pod", _).as(Set(pod)),
+                                                                 _ => ZIO.succeed(Set.empty)
+                                                               )
                                                            )
                                                            .map(_.flatten)
         shardsToRemove                                 =
@@ -135,9 +138,11 @@ class ShardManager(
                                                              )
                                                            }
                                                            .map(_.flatten.toSet)
-        failedPods                                     = failedPingedPods ++ failedUnassignedPods ++ failedAssignedPods
+        failedPods                                     = failedPingedPods.map(_ -> "failed ping") ++ failedUnassignedPods.map(
+                                                           _ -> "failed unassign"
+                                                         ) ++ failedAssignedPods.map(_ -> "failed assign")
         // check if failing pods are still up
-        _                                             <- ZIO.foreachDiscard(failedPods)(notifyUnhealthyPod).forkDaemon
+        _                                             <- ZIO.foreachDiscard(failedPods) { case (pod, _) => notifyUnhealthyPod(pod) }.forkDaemon
         _                                             <- ZIO.logWarning(s"Failed to rebalance pods: $failedPods").when(failedPods.nonEmpty)
         // retry rebalancing later if there was any failure
         _                                             <- (Clock.sleep(config.rebalanceRetryInterval) *> rebalance(rebalanceImmediately)).forkDaemon

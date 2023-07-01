@@ -21,6 +21,7 @@ class Sharding private (
   shardAssignments: Ref[Map[ShardId, PodAddress]],
   entityStates: Ref[Map[String, EntityState]],
   singletons: Ref.Synchronized[List[(String, UIO[Nothing], Option[Fiber[Nothing, Nothing]])]],
+  receivers: Ref[Map[String, (Enqueue[Nothing], Fiber[Nothing, Nothing])]],
   replyPromises: Ref.Synchronized[Map[String, Promise[Throwable, Option[Any]]]], // promise for each pending reply,
   lastUnhealthyNodeReported: Ref[OffsetDateTime],
   isShuttingDownRef: Ref[Boolean],
@@ -38,13 +39,29 @@ class Sharding private (
       isShuttingDownRef.set(false) *>
       shardManager.register(address)
 
-  val unregister: Task[Unit] =
-    shardManager.getAssignments *> // ping the shard manager first to stop if it's not available
-      ZIO.logDebug(s"Stopping local entities") *>
-      isShuttingDownRef.set(true) *>
-      entityStates.get.flatMap(states => ZIO.foreachDiscard(states.values)(_.entityManager.terminateAllEntities)) *>
-      ZIO.logDebug(s"Unregistering pod $address to Shard Manager") *>
-      shardManager.unregister(address)
+  val unregister: UIO[Unit] =
+    // ping the shard manager first to stop if it's not available
+    shardManager.getAssignments.foldCauseZIO(
+      ZIO.logWarningCause("Shard Manager not available. Can't unregister cleanly", _),
+      _ =>
+        ZIO.logDebug(s"Stopping local entities") *>
+          isShuttingDownRef.set(true) *>
+          entityStates.get.flatMap(
+            ZIO.foreachDiscard(_) { case (name, entity) =>
+              entity.entityManager.terminateAllEntities.catchAllCause(
+                ZIO.logErrorCause(s"Error during stop of entity $name", _)
+              )
+            }
+          ) *>
+          receivers.get.flatMap(
+            ZIO.foreachDiscard(_) { case (receiver, (queue, fiber)) =>
+              queue.shutdown
+                .catchAllCause(ZIO.logErrorCause(s"Error during stop of receiver $receiver", _))
+            }
+          ) *>
+          ZIO.logDebug(s"Unregistering pod $address to Shard Manager") *>
+          shardManager.unregister(address).catchAllCause(ZIO.logErrorCause("Error during unregister", _))
+    )
 
   private def isSingletonNode: UIO[Boolean] =
     // Start singletons on the pod hosting shard 1.
@@ -355,6 +372,44 @@ class Sharding private (
                          .runDrain
                          .forkScoped
     } yield ()
+
+  /**
+   * Start a transient entity that can receive messages of type `Msg` from any pod.
+   *
+   * This transient entity is not intended to out live this pod. It is typically tied to a local resource like a
+   * web-socket.
+   *
+   * When a message is sent, the returned boolean indicates if the receiver is still alive. If a receiver is not alive,
+   * sending a message to it does nothing (except consuming CPU and network bandwidth) so senders should properly
+   * handle when `Receiver.send` returns `false` to prevent from trying to send any future messages to that receiver.
+   */
+  def receiver[R, Msg](behavior: Dequeue[Msg] => URIO[R, Nothing]): URIO[R, Receiver[Msg]] =
+    for {
+      uuid    <- Random.nextUUID
+      receiver = Receiver[Msg](address, uuid.toString)
+      queue   <- Queue.unbounded[Msg]
+      fiber   <- behavior(queue).ensuring(receivers.update(_ - receiver.id)).forkDaemon
+      _       <- receivers.update(_ + (receiver.id -> ((queue, fiber))))
+    } yield receiver
+
+  def sendToReceiver[Msg](receiver: Receiver[Msg], message: Msg): Task[Boolean] =
+    if (config.simulateRemotePods && receiver.pod == address) {
+      serialization.encode(message).flatMap(localReceive(receiver.id, _))
+    } else if (receiver.pod == address) {
+      receivers.get.map(_.get(receiver.id)).flatMap {
+        case Some((queue, _)) => queue.asInstanceOf[Enqueue[Msg]].offer(message).as(true)
+        case None             => ZIO.succeed(false)
+      }
+    } else {
+      serialization.encode(message).flatMap(pods.receive(receiver.pod, receiver.id, _))
+    }
+
+  private[shardcake] def localReceive(receiverId: String, message: Array[Byte]): Task[Boolean] =
+    receivers.get.map(_.get(receiverId)).flatMap {
+      case Some((queue, _)) =>
+        serialization.decode[Any](message).flatMap(queue.asInstanceOf[Enqueue[Any]].offer).as(true)
+      case None             => ZIO.succeed(false)
+    }
 }
 
 object Sharding {
@@ -401,6 +456,15 @@ object Sharding {
                                            }
                                          )
                                        )
+        receivers                 <- Ref
+                                       .make[Map[String, (Enqueue[Nothing], Fiber[Nothing, Nothing])]](Map.empty)
+                                       .withFinalizer(
+                                         _.get.flatMap(receivers =>
+                                           ZIO.foreachDiscard(receivers) { case (_, (queue, fiber)) =>
+                                             queue.shutdown *> fiber.interrupt
+                                           }
+                                         )
+                                       )
         promises                  <- Ref.Synchronized.make[Map[String, Promise[Throwable, Option[Any]]]](Map())
         cdt                       <- Clock.currentDateTime
         lastUnhealthyNodeReported <- Ref.make(cdt)
@@ -412,6 +476,7 @@ object Sharding {
                                        shardsCache,
                                        entityStates,
                                        singletons,
+                                       receivers,
                                        promises,
                                        lastUnhealthyNodeReported,
                                        shuttingDown,
@@ -497,6 +562,11 @@ object Sharding {
     sendTimeout: Option[Duration] = None
   ): URIO[Sharding, Broadcaster[Msg]] =
     ZIO.serviceWith[Sharding](_.broadcaster(topicType, sendTimeout))
+
+  def receiver[R, Msg: Tag](
+    behavior: Dequeue[Msg] => URIO[R, Nothing]
+  ): URIO[Sharding with R, Receiver[Msg]] =
+    ZIO.serviceWithZIO[Sharding](_.receiver(behavior))
 
   /**
    * Get the list of pods currently registered to the Shard Manager

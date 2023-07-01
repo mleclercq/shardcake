@@ -7,6 +7,7 @@ service ShardingService {
     rpc UnassignShards (UnassignShardsRequest) returns (UnassignShardsResponse) {}
     rpc Send (SendRequest) returns (SendResponse) {}
     rpc PingShards (PingShardsRequest) returns (PingShardsResponse) {}
+    rpc Receive (ReceiveMessage) returns (ReceiveResponse) {}
 }
 
 message AssignShardsRequest {
@@ -35,3 +36,10 @@ message SendResponse {
 message PingShardsRequest {}
 
 message PingShardsResponse {}
+
+message ReceiveMessage {
+    string receive_id = 1;
+    bytes body = 2;
+}
+
+message ReceiveResponse {}

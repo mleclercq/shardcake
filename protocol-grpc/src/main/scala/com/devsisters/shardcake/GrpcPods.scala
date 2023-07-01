@@ -80,6 +80,19 @@ class GrpcPods(
               else ZIO.some(res.body.toByteArray)
           )
       )
+
+  def receive(pod: PodAddress, receiveId: String, body: Array[Byte]): Task[Boolean] =
+    getConnection(pod).flatMap(
+      _.receive(ReceiveMessage(receiveId, ByteString.copyFrom(body)))
+        .as(true)
+        .catchSome {
+          case ex if {
+                val code = ex.getStatus.getCode
+                code == Status.Code.RESOURCE_EXHAUSTED || code == Status.Code.UNAVAILABLE || code == Status.Code.CANCELLED
+              } =>
+            ZIO.succeed(false)
+        }
+    )
 }
 
 object GrpcPods {

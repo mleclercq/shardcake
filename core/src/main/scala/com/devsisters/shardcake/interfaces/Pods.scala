@@ -30,6 +30,11 @@ trait Pods {
    * Send a message to a pod
    */
   def sendMessage(pod: PodAddress, message: BinaryMessage): Task[Option[Array[Byte]]]
+
+  /**
+   * Receive a message from another pod
+   */
+  def receive(pod: PodAddress, receiveId: String, body: Array[Byte]): Task[Boolean]
 }
 
 object Pods {
@@ -44,6 +49,7 @@ object Pods {
       def unassignShards(pod: PodAddress, shards: Set[ShardId]): Task[Unit]               = ZIO.unit
       def ping(pod: PodAddress): Task[Unit]                                               = ZIO.unit
       def sendMessage(pod: PodAddress, message: BinaryMessage): Task[Option[Array[Byte]]] = ZIO.none
+      def receive(pod: PodAddress, receiveId: String, body: Array[Byte]): Task[Boolean]   = ZIO.succeed(false)
     })
 
   case class BinaryMessage(entityId: String, entityType: String, body: Array[Byte], replyId: Option[String])
