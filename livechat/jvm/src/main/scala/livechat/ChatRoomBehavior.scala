@@ -20,7 +20,7 @@ object ChatRoomBehavior {
     final case class Write(userName: String, message: String)              extends Message
 
     final case class GetHistory(from: Int, to: Int, replier: Replier[Chunk[ChatEvent.UserWrote]]) extends Message
-    final case class GetUpdates(from: Int, replier: Replier[ChatEvent])                           extends Message
+    final case class GetUpdates(from: Int, replier: StreamReplier[ChatEvent])                     extends Message
   }
 
   object ChatRoom extends EntityType[Message]("chatRoom")
