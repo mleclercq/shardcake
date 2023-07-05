@@ -103,10 +103,15 @@ object ChatRoomBehavior {
       case Message.GetUpdates(from, replier)     =>
         for {
           s            <- state.get
+          _            <- ZIO.log(s"Start sending update to $replier")
           pastMessages <- getHistory(entityId, redis, from, -1)
                             .when(from > 0) // TODO smells like a off-by-one joke
                             .someOrElse(Chunk.empty[ChatEvent])
-          _            <- replier.replyStream(ZStream.fromIterable(pastMessages) ++ ZStream.fromHub(s.updates))
+          _            <- replier.replyStream(
+                            (ZStream.fromIterable(pastMessages) ++ ZStream.fromHub(s.updates))
+                              .tap(e => ZIO.log(s"Sending $e to $replier"))
+                              .ensuring(ZIO.log(s"Stop sending updates to $replier"))
+                          )
         } yield ()
     }
 
